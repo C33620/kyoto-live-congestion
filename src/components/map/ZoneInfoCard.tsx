@@ -1,72 +1,280 @@
 "use client";
 
+import { ACTIVITY_TAGS } from "@/constants/activityTags";
 import {
   CONGESTION_COLORS,
   CONGESTION_LABELS,
 } from "@/constants/congestionColors";
+import { KYOTO_ZONES } from "@/constants/kyotoZones";
+import { ZONE_TAG_PROFILES } from "@/constants/zoneTagProfiles";
 import type { CongestionZone } from "@/types";
-import { useState } from "react";
+import dynamic from "next/dynamic";
 
-// ─── Types ─────────────────────────────────────────────────────────────────
+import { useEffect, useState } from "react";
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 export interface ShopMarker {
   id: number;
   lat: number;
   lon: number;
   name: string;
   type: string;
+  cuisine?: string;
+  rating?: number | null;
+  tags?: Record<string, string>;
 }
 
 interface ZoneInfoCardProps {
   zone: CongestionZone;
   shops: ShopMarker[] | null;
   onDismiss: () => void;
+  selectedTagIds?: string[];
+  userPosition?: [number, number] | null;
 }
 
-// ─── Category config ────────────────────────────────────────────────────────
-const CATEGORY_CONFIG: Record<string, { label: string; emoji: string }> = {
-  restaurant: { label: "Restaurants", emoji: "🍜" },
-  cafe: { label: "Cafés", emoji: "☕" },
-  bar: { label: "Bars", emoji: "🍺" },
-  fast_food: { label: "Fast Food", emoji: "🍔" },
-  convenience: { label: "Convenience", emoji: "🏪" },
-  supermarket: { label: "Supermarkets", emoji: "🛒" },
-  bakery: { label: "Bakeries", emoji: "🥐" },
-  clothes: { label: "Clothing", emoji: "👗" },
-  souvenir: { label: "Souvenirs", emoji: "🎁" },
-  gift: { label: "Gifts", emoji: "🎁" },
-  electronics: { label: "Electronics", emoji: "📱" },
-  pharmacy: { label: "Pharmacies", emoji: "💊" },
-};
+// ─── Lazy-loaded heavy sections ───────────────────────────────────────────────
+const ZoneShopsSection = dynamic(
+  () => import("@/components/map/ZoneShopsSection"),
+  { ssr: false, loading: () => <ShopsSkeleton /> },
+);
 
-function getCategoryConfig(type: string) {
+// ─── Distance helpers ─────────────────────────────────────────────────────────
+function haversineKm(a: [number, number], b: [number, number]): number {
+  const R = 6371;
+  const dLat = ((b[0] - a[0]) * Math.PI) / 180;
+  const dLon = ((b[1] - a[1]) * Math.PI) / 180;
+  const s =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((a[0] * Math.PI) / 180) *
+      Math.cos((b[0] * Math.PI) / 180) *
+      Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s));
+}
+
+function formatDuration(minutes: number): string {
+  if (minutes < 1) return "< 1 min";
+  if (minutes < 60) return `${Math.round(minutes)} min`;
+  return `${Math.floor(minutes / 60)}h ${Math.round(minutes % 60)}min`;
+}
+
+// ─── Shared icon sub-components ───────────────────────────────────────────────
+function MapPinIcon() {
   return (
-    CATEGORY_CONFIG[type] ?? {
-      label: capitalize(type.replace(/_/g, " ")),
-      emoji: "🛍️",
-    }
+    <svg
+      width="11"
+      height="11"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      aria-hidden="true"
+      className="shrink-0"
+    >
+      <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" />
+      <circle cx="12" cy="9" r="2.5" />
+    </svg>
   );
 }
 
-function capitalize(str: string) {
-  return str.charAt(0).toUpperCase() + str.slice(1);
+function GlobeIcon() {
+  return (
+    <svg
+      width="11"
+      height="11"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      aria-hidden="true"
+      className="shrink-0"
+    >
+      <circle cx="12" cy="12" r="10" />
+      <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+    </svg>
+  );
 }
 
-function groupShops(shops: ShopMarker[]): [string, ShopMarker[]][] {
-  const map = new Map<string, ShopMarker[]>();
-  for (const shop of shops) {
-    const key = shop.type;
-    if (!map.has(key)) map.set(key, []);
-    map.get(key)!.push(shop);
-  }
-  const knownOrder = Object.keys(CATEGORY_CONFIG);
-  return [...map.entries()].sort(([a], [b]) => {
-    const ai = knownOrder.indexOf(a);
-    const bi = knownOrder.indexOf(b);
-    if (ai !== -1 && bi !== -1) return ai - bi;
-    if (ai !== -1) return -1;
-    if (bi !== -1) return 1;
-    return a.localeCompare(b);
-  });
+// ─── Shops skeleton (shown while ZoneShopsSection loads) ─────────────────────
+function ShopsSkeleton() {
+  return (
+    <div className="flex flex-col gap-1 pt-1">
+      {[1, 2, 3].map((i) => (
+        <div
+          key={i}
+          className="h-8 rounded-lg bg-[var(--color-surface-offset)] animate-pulse"
+        />
+      ))}
+    </div>
+  );
+}
+
+// ─── Distance row ─────────────────────────────────────────────────────────────
+function DistanceRow({
+  userPosition,
+  zoneId,
+}: {
+  userPosition: [number, number];
+  zoneId: string;
+}) {
+  const zoneGeo = KYOTO_ZONES.find((z) => z.id === zoneId);
+  if (!zoneGeo) return null;
+
+  const km = haversineKm(userPosition, [
+    zoneGeo.center.lat,
+    zoneGeo.center.lng,
+  ]);
+  const walkMin = (km / 5) * 60;
+  const transitMin = (km / 20) * 60 * 1.3;
+  const distLabel =
+    km < 1 ? `${Math.round(km * 1000)} m` : `${km.toFixed(1)} km`;
+
+  return (
+    <div className="flex items-center gap-3 mt-2.5 pt-2.5 border-t border-[var(--color-divider)]">
+      {/* Walk */}
+      <span
+        className="flex items-center gap-1 text-xs text-[var(--color-text-muted)]"
+        title="Estimated walking time"
+      >
+        <svg
+          width="11"
+          height="11"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          aria-hidden="true"
+          className="shrink-0"
+        >
+          <circle cx="12" cy="4" r="1.5" />
+          <path d="M9 12l2-4 3 3-1 4" />
+          <path d="M7 20l2-4M17 20l-3-5" />
+        </svg>
+        {formatDuration(walkMin)}
+      </span>
+
+      {/* Transit */}
+      <span
+        className="flex items-center gap-1 text-xs text-[var(--color-text-muted)]"
+        title="Estimated transit time"
+      >
+        <svg
+          width="11"
+          height="11"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          aria-hidden="true"
+          className="shrink-0"
+        >
+          <rect x="1" y="6" width="22" height="13" rx="2" />
+          <path d="M1 13h22" />
+          <circle cx="5" cy="19" r="1" />
+          <circle cx="19" cy="19" r="1" />
+          <path d="M16 6V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2" />
+        </svg>
+        ~{formatDuration(transitMin)}
+      </span>
+
+      {/* Distance */}
+      <span className="ml-auto text-xs text-[var(--color-text-faint)] tabular-nums font-medium">
+        {distLabel}
+      </span>
+    </div>
+  );
+}
+
+// ─── Activities section ───────────────────────────────────────────────────────
+function ActivitiesSection({
+  zoneId,
+  selectedTagIds,
+}: {
+  zoneId: string;
+  selectedTagIds: string[];
+}) {
+  const matchingTagProfiles = selectedTagIds
+    .map((tagId) => {
+      const tag = ACTIVITY_TAGS.find((t) => t.id === tagId);
+      const profile = ZONE_TAG_PROFILES?.[zoneId]?.[tagId];
+      return tag && profile ? { tag, profile } : null;
+    })
+    .filter(Boolean) as {
+    tag: (typeof ACTIVITY_TAGS)[number];
+    profile: {
+      tip: string;
+      bestTime?: string;
+      district?: string;
+      website?: string;
+      googleMaps?: string;
+    };
+  }[];
+
+  if (matchingTagProfiles.length === 0) return null;
+
+  return (
+    <>
+      <div className="h-px bg-[var(--color-divider)] mx-4 shrink-0" />
+      <div className="px-4 py-3 shrink-0">
+        <p className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-2">
+          Why visit here
+        </p>
+        <div className="flex flex-col gap-3">
+          {matchingTagProfiles.map(({ tag, profile }) => (
+            <div key={tag.id} className="flex flex-col gap-0.5">
+              <div className="flex items-center gap-1.5">
+                <span className="text-sm shrink-0" aria-hidden="true">
+                  {tag.emoji}
+                </span>
+                <span className="text-xs font-medium text-[var(--color-text)]">
+                  {tag.label}
+                  {profile.district && (
+                    <span className="text-[var(--color-text-muted)] font-normal">
+                      {" "}
+                      · {profile.district}
+                    </span>
+                  )}
+                </span>
+              </div>
+              <p className="text-xs text-[var(--color-text-muted)] pl-5 leading-relaxed">
+                {profile.tip}
+              </p>
+              {profile.bestTime && (
+                <p className="text-xs text-[var(--color-primary)] pl-5">
+                  ⏰ Best time: {profile.bestTime}
+                </p>
+              )}
+              {(profile.googleMaps || profile.website) && (
+                <div className="flex items-center gap-1.5 pl-5 mt-1 flex-wrap">
+                  {profile.googleMaps && (
+                    <a
+                      href={profile.googleMaps}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full border border-[var(--color-border)] bg-[var(--color-surface-offset)] hover:bg-[var(--color-surface-dynamic)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+                    >
+                      <MapPinIcon />
+                      Maps
+                    </a>
+                  )}
+                  {profile.website && (
+                    <a
+                      href={profile.website}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full border border-[var(--color-border)] bg-[var(--color-surface-offset)] hover:bg-[var(--color-surface-dynamic)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+                    >
+                      <GlobeIcon />
+                      Website
+                    </a>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </>
+  );
 }
 
 function formatUpdatedAt(isoString: string): string {
@@ -78,25 +286,22 @@ function formatUpdatedAt(isoString: string): string {
   });
 }
 
-// ─── Component ─────────────────────────────────────────────────────────────
-export function ZoneInfoCard({ zone, shops, onDismiss }: ZoneInfoCardProps) {
+// ─── Component ────────────────────────────────────────────────────────────────
+export function ZoneInfoCard({
+  zone,
+  shops,
+  onDismiss,
+  selectedTagIds = [],
+  userPosition,
+}: ZoneInfoCardProps) {
   const colors = CONGESTION_COLORS[zone.level];
   const label = CONGESTION_LABELS[zone.level];
-  const [openCategories, setOpenCategories] = useState<Set<string>>(new Set());
 
-  const toggleCategory = (type: string) => {
-    setOpenCategories((prev) => {
-      const next = new Set(prev);
-      if (next.has(type)) {
-        next.delete(type);
-      } else {
-        next.add(type);
-      }
-      return next;
-    });
-  };
-
-  const grouped = shops ? groupShops(shops) : [];
+  // Reset scroll position when zone changes
+  const [scrollKey, setScrollKey] = useState(0);
+  useEffect(() => {
+    setScrollKey((k) => k + 1);
+  }, [zone.id]);
 
   return (
     <div
@@ -135,7 +340,6 @@ export function ZoneInfoCard({ zone, shops, onDismiss }: ZoneInfoCardProps) {
           </button>
         </div>
 
-        {/* Level badge */}
         <div className="flex items-center gap-2 mb-2">
           <span
             className={`w-2.5 h-2.5 rounded-full shrink-0 ${colors.tailwindBg}`}
@@ -149,7 +353,6 @@ export function ZoneInfoCard({ zone, shops, onDismiss }: ZoneInfoCardProps) {
           </span>
         </div>
 
-        {/* Congestion bar — uses fill hex directly, no Tailwind purge risk */}
         <div
           className="w-full h-2 rounded-full bg-[var(--color-surface-offset)] overflow-hidden mb-3"
           aria-hidden="true"
@@ -163,133 +366,33 @@ export function ZoneInfoCard({ zone, shops, onDismiss }: ZoneInfoCardProps) {
           />
         </div>
 
-        {/* Timestamp */}
         <p className="text-xs text-[var(--color-text-muted)]">
           Last updated{" "}
           <time dateTime={zone.updatedAt} className="tabular-nums">
             {formatUpdatedAt(zone.updatedAt)}
           </time>
         </p>
+
+        {/* ── Distance estimates (only when user position is available) ── */}
+        {userPosition && (
+          <DistanceRow userPosition={userPosition} zoneId={zone.id} />
+        )}
       </div>
 
-      {/* ── Divider ── */}
+      {/* ── Matching activities ── */}
+      <ActivitiesSection zoneId={zone.id} selectedTagIds={selectedTagIds} />
+
       <div className="h-px bg-[var(--color-divider)] mx-4 shrink-0" />
 
-      {/* ── Shops section ── */}
-      <div className="flex flex-col min-h-0 overflow-y-auto p-4 pt-3">
+      {/* ── Shops section (code-split) ── */}
+      <div
+        key={scrollKey}
+        className="flex flex-col min-h-0 overflow-y-auto p-4 pt-3"
+      >
         <p className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-2 shrink-0">
           Nearby places
         </p>
-
-        {/* Loading */}
-        {shops === null && (
-          <div className="flex items-center gap-2 py-3 text-xs text-[var(--color-text-muted)]">
-            <svg
-              className="animate-spin w-3.5 h-3.5 shrink-0"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-            >
-              <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
-            </svg>
-            Loading places…
-          </div>
-        )}
-
-        {/* Empty */}
-        {shops !== null && shops.length === 0 && (
-          <p className="text-xs text-[var(--color-text-muted)] py-3 text-center">
-            No places found in this area
-          </p>
-        )}
-
-        {/* Grouped categories */}
-        {shops !== null && grouped.length > 0 && (
-          <div className="flex flex-col gap-1">
-            {grouped.map(([type, items]) => {
-              const config = getCategoryConfig(type);
-              const isOpen = openCategories.has(type);
-
-              return (
-                <div
-                  key={type}
-                  className="rounded-lg overflow-hidden border border-[var(--color-border)]"
-                >
-                  <button
-                    onClick={() => toggleCategory(type)}
-                    className="w-full flex items-center gap-2 px-3 py-2 bg-[var(--color-surface-offset)] hover:bg-[var(--color-surface-dynamic)] transition-colors text-left"
-                    aria-expanded={isOpen}
-                  >
-                    <span className="text-sm shrink-0" aria-hidden="true">
-                      {config.emoji}
-                    </span>
-                    <span className="text-xs font-semibold text-[var(--color-text)] flex-1">
-                      {config.label}
-                    </span>
-                    <span className="text-xs text-[var(--color-text-muted)] tabular-nums mr-1">
-                      {items.length}
-                    </span>
-                    <svg
-                      width="12"
-                      height="12"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2.5"
-                      aria-hidden="true"
-                      style={{
-                        transform: isOpen ? "rotate(180deg)" : "rotate(0deg)",
-                        transition: "transform 200ms ease",
-                        color: "var(--color-text-muted)",
-                        flexShrink: 0,
-                      }}
-                    >
-                      <path d="M6 9l6 6 6-6" />
-                    </svg>
-                  </button>
-
-                  {isOpen && (
-                    <ul
-                      role="list"
-                      className="divide-y divide-[var(--color-divider)]"
-                    >
-                      {items.map((shop) => (
-                        <li key={shop.id}>
-                          <a
-                            href={`https://www.google.com/maps/search/?api=1&query=${shop.lat},${shop.lon}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex items-center justify-between gap-2 px-3 py-2 bg-[var(--color-surface)] hover:bg-[var(--color-surface-offset)] transition-colors group"
-                          >
-                            <p className="text-xs font-medium text-[var(--color-text)] truncate">
-                              {shop.name}
-                            </p>
-                            {/* External link icon */}
-                            <svg
-                              width="11"
-                              height="11"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="2"
-                              aria-hidden="true"
-                              className="shrink-0 text-[var(--color-text-faint)] group-hover:text-[var(--color-primary)] transition-colors"
-                            >
-                              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-                              <polyline points="15 3 21 3 21 9" />
-                              <line x1="10" y1="14" x2="21" y2="3" />
-                            </svg>
-                          </a>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
+        <ZoneShopsSection shops={shops} zoneId={zone.id} />
       </div>
     </div>
   );

@@ -1,18 +1,27 @@
 "use client";
 
+import { ActivityTagFilter } from "@/components/map/ActivityTagFilter";
 import type { ShopMarker } from "@/components/map/ZoneInfoCard";
 import { ZoneInfoCard } from "@/components/map/ZoneInfoCard";
 import { KYOTO_ZONES } from "@/constants/kyotoZones";
 import { congestionAdapter } from "@/lib/congestion";
 import type { CongestionZone } from "@/types";
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
+// ─── Types ────────────────────────────────────────────────────────────────────
 interface OverpassElement {
   id: number;
   lat: number;
   lon: number;
-  tags?: Record<string, string>;
+  tags?: {
+    name?: string;
+    "name:en"?: string;
+    shop?: string;
+    amenity?: string;
+    cuisine?: string;
+    [key: string]: string | undefined;
+  };
 }
 
 const KyotoMapInner = dynamic(() => import("@/components/map/KyotoMapInner"), {
@@ -21,6 +30,7 @@ const KyotoMapInner = dynamic(() => import("@/components/map/KyotoMapInner"), {
 
 const REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 
+// ─── Overpass fetch ───────────────────────────────────────────────────────────
 async function fetchShopsNear(
   lat: number,
   lng: number,
@@ -34,11 +44,13 @@ async function fetchShopsNear(
     );
     out body;
   `;
+
   const res = await fetch("https://overpass-api.de/api/interpreter", {
     method: "POST",
     body: query,
   });
   const data = await res.json();
+
   return data.elements.map((el: OverpassElement) => ({
     id: el.id,
     lat: el.lat,
@@ -50,9 +62,11 @@ async function fetchShopsNear(
       el.tags?.amenity ||
       "Shop",
     type: el.tags?.shop || el.tags?.amenity || "shop",
+    cuisine: el.tags?.cuisine,
   }));
 }
 
+// ─── Component ────────────────────────────────────────────────────────────────
 export function KyotoMap() {
   const [congestionData, setCongestionData] = useState<
     Map<string, CongestionZone>
@@ -61,9 +75,30 @@ export function KyotoMap() {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastFetched, setLastFetched] = useState<Date | null>(null);
+  const [activeTagZoneIds, setActiveTagZoneIds] = useState<Set<string> | null>(
+    null,
+  );
+  const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
 
-  // ── Shops state (lifted up) ──────────────────────────────────────────────
-  // null = not fetched yet / loading, ShopMarker[] = loaded (possibly empty)
+  // ── User geolocation ────────────────────────────────────────────────────────
+  const [userPosition, setUserPosition] = useState<[number, number] | null>(
+    null,
+  );
+
+  useEffect(() => {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      (pos) => setUserPosition([pos.coords.latitude, pos.coords.longitude]),
+      () => null, // silently fail if denied or unavailable
+      { enableHighAccuracy: true, timeout: 10000 },
+    );
+  }, []);
+
+  const activeTagZoneIdsRef = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    activeTagZoneIdsRef.current = activeTagZoneIds;
+  }, [activeTagZoneIds]);
+
   const [shopsByZone, setShopsByZone] = useState<
     Map<string, ShopMarker[] | null>
   >(new Map());
@@ -85,26 +120,24 @@ export function KyotoMap() {
   useEffect(() => {
     loadData(false);
   }, [loadData]);
+
   useEffect(() => {
     const interval = setInterval(() => loadData(true), REFRESH_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [loadData]);
 
-  // ── Zone click: select + auto-fetch shops ────────────────────────────────
   const handleZoneClick = useCallback(
     async (zoneId: string) => {
-      // Toggle off
-      if (selectedZoneId === zoneId) {
+      const currentFilter = activeTagZoneIdsRef.current;
+
+      if (selectedZoneId === zoneId && !currentFilter) {
         setSelectedZoneId(null);
         return;
       }
 
       setSelectedZoneId(zoneId);
-
-      // Already fetched — don't re-fetch
       if (shopsByZone.has(zoneId)) return;
 
-      // Mark as loading (null = loading)
       setShopsByZone((prev) => new Map(prev).set(zoneId, null));
 
       try {
@@ -133,7 +166,6 @@ export function KyotoMap() {
     ? (congestionData.get(selectedZoneId) ?? null)
     : null;
 
-  // shops: undefined (not started) → null (loading) → ShopMarker[] (done)
   const selectedShops = selectedZoneId
     ? shopsByZone.has(selectedZoneId)
       ? shopsByZone.get(selectedZoneId)!
@@ -172,9 +204,12 @@ export function KyotoMap() {
           shopsByZone={shopsByZone}
           onZoneClick={handleZoneClick}
           onDismiss={handleDismissCard}
+          activeTagZoneIds={activeTagZoneIds}
+          userPosition={userPosition}
         />
       )}
 
+      {/* ── Refresh button + timestamp ── */}
       <div className="absolute top-4 left-16 flex items-center gap-2 z-[2000]">
         <button
           onClick={() => loadData(true)}
@@ -214,12 +249,27 @@ export function KyotoMap() {
         )}
       </div>
 
+      {/* ── Activity tag filter ── */}
+      <div className="absolute bottom-4 left-4 z-[2000]">
+        <ActivityTagFilter
+          congestionData={congestionData}
+          onZoneSelect={(zoneId) => setSelectedZoneId(zoneId)}
+          onTagsChange={(matchingIds, tagIds) => {
+            setActiveTagZoneIds(matchingIds);
+            setSelectedTagIds(tagIds ?? []);
+          }}
+        />
+      </div>
+
+      {/* ── Zone info card ── */}
       {selectedZone && (
         <div className="absolute top-4 right-4 z-[2000]">
           <ZoneInfoCard
             zone={selectedZone}
             shops={selectedShops}
             onDismiss={handleDismissCard}
+            selectedTagIds={selectedTagIds}
+            userPosition={userPosition}
           />
         </div>
       )}
