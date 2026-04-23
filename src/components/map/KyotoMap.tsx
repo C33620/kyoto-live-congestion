@@ -1,13 +1,21 @@
+// components/map/KyotoMap.tsx
 "use client";
 
 import { ActivityTagFilter } from "@/components/map/ActivityTagFilter";
+import KawaiiLoader from "@/components/map/KawaiiLoader";
 import type { ShopMarker } from "@/components/map/ZoneInfoCard";
 import { ZoneInfoCard } from "@/components/map/ZoneInfoCard";
 import { KYOTO_ZONES } from "@/constants/kyotoZones";
 import { congestionAdapter } from "@/lib/congestion";
 import type { CongestionZone } from "@/types";
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type TouchEvent,
+} from "react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface OverpassElement {
@@ -29,6 +37,8 @@ const KyotoMapInner = dynamic(() => import("@/components/map/KyotoMapInner"), {
 });
 
 const REFRESH_INTERVAL_MS = 10 * 60 * 1000;
+const MIN_LOADER_MS = 3000;
+const TAB_WIDTH = 28; // px — always-visible peek width
 
 // ─── Overpass fetch ───────────────────────────────────────────────────────────
 async function fetchShopsNear(
@@ -89,7 +99,7 @@ export function KyotoMap() {
     if (!navigator.geolocation) return;
     navigator.geolocation.getCurrentPosition(
       (pos) => setUserPosition([pos.coords.latitude, pos.coords.longitude]),
-      () => null, // silently fail if denied or unavailable
+      () => null,
       { enableHighAccuracy: true, timeout: 10000 },
     );
   }, []);
@@ -103,11 +113,45 @@ export function KyotoMap() {
     Map<string, ShopMarker[] | null>
   >(new Map());
 
+  // ── Filter drawer state + swipe ─────────────────────────────────────────────
+  const [filterOpen, setFilterOpen] = useState(false);
+  const swipeStartX = useRef<number | null>(null);
+  const swipeStartY = useRef<number | null>(null);
+
+  const handleTouchStart = (e: TouchEvent<HTMLDivElement>) => {
+    swipeStartX.current = e.touches[0].clientX;
+    swipeStartY.current = e.touches[0].clientY;
+  };
+
+  const handleTouchEnd = (e: TouchEvent<HTMLDivElement>) => {
+    if (swipeStartX.current === null || swipeStartY.current === null) return;
+    const dx = e.changedTouches[0].clientX - swipeStartX.current;
+    const dy = Math.abs(e.changedTouches[0].clientY - swipeStartY.current);
+    // Only react to clearly horizontal swipes
+    if (Math.abs(dx) > 40 && Math.abs(dx) > dy) {
+      if (dx < 0) setFilterOpen(false); // swipe left  → hide
+      if (dx > 0) setFilterOpen(true); // swipe right → show
+    }
+    swipeStartX.current = null;
+    swipeStartY.current = null;
+  };
+
+  // ── Data loading ────────────────────────────────────────────────────────────
   const loadData = useCallback(async (isBackground = false) => {
-    if (isBackground) setIsRefreshing(true);
-    else setIsLoading(true);
+    if (isBackground) {
+      setIsRefreshing(true);
+    } else {
+      setIsLoading(true);
+    }
+
     try {
-      const zones = await congestionAdapter.fetchAllZones();
+      const [zones] = await Promise.all([
+        congestionAdapter.fetchAllZones(),
+        !isBackground
+          ? new Promise<void>((res) => setTimeout(res, MIN_LOADER_MS))
+          : Promise.resolve(),
+      ]);
+
       const map = new Map(zones.map((z) => [z.id, z]));
       setCongestionData(map);
       setLastFetched(new Date());
@@ -126,6 +170,7 @@ export function KyotoMap() {
     return () => clearInterval(interval);
   }, [loadData]);
 
+  // ── Zone interactions ───────────────────────────────────────────────────────
   const handleZoneClick = useCallback(
     async (zoneId: string) => {
       const currentFilter = activeTagZoneIdsRef.current;
@@ -175,28 +220,7 @@ export function KyotoMap() {
   return (
     <div className="relative w-full h-full">
       {isLoading ? (
-        <div className="absolute inset-0 flex items-center justify-center bg-white/40 backdrop-blur-sm z-[2000]">
-          <div className="flex flex-col items-center gap-3">
-            <svg
-              className="animate-spin w-6 h-6 text-[var(--color-primary)]"
-              viewBox="0 0 24 24"
-              fill="none"
-              aria-hidden="true"
-            >
-              <circle
-                cx="12"
-                cy="12"
-                r="10"
-                stroke="currentColor"
-                strokeWidth="3"
-                strokeDasharray="30 70"
-              />
-            </svg>
-            <p className="text-sm text-[var(--color-text-muted)]">
-              Fetching live congestion data…
-            </p>
-          </div>
-        </div>
+        <KawaiiLoader />
       ) : (
         <KyotoMapInner
           congestionData={congestionData}
@@ -249,16 +273,91 @@ export function KyotoMap() {
         )}
       </div>
 
-      {/* ── Activity tag filter ── */}
-      <div className="absolute bottom-4 left-4 z-[2000]">
-        <ActivityTagFilter
-          congestionData={congestionData}
-          onZoneSelect={(zoneId) => setSelectedZoneId(zoneId)}
-          onTagsChange={(matchingIds, tagIds) => {
-            setActiveTagZoneIds(matchingIds);
-            setSelectedTagIds(tagIds ?? []);
+      {/* ── Activity tag filter — swipeable drawer ── */}
+      <div
+        className="absolute bottom-4 left-0 z-[2000] flex items-end"
+        style={{
+          transform: filterOpen
+            ? "translateX(0)"
+            : `translateX(calc(-100% + ${TAB_WIDTH}px))`,
+          transition: "transform 320ms cubic-bezier(0.16, 1, 0.3, 1)",
+        }}
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
+      >
+        {/* Filter panel */}
+        <div className="pl-4">
+          <ActivityTagFilter
+            congestionData={congestionData}
+            onZoneSelect={(zoneId) => setSelectedZoneId(zoneId)}
+            onTagsChange={(matchingIds, tagIds) => {
+              setActiveTagZoneIds(matchingIds);
+              setSelectedTagIds(tagIds ?? []);
+            }}
+          />
+        </div>
+
+        {/* Always-visible tab — tap or swipe to toggle */}
+        <button
+          onClick={() => setFilterOpen((o) => !o)}
+          aria-label={filterOpen ? "Hide filters" : "Show filters"}
+          className="shrink-0 flex flex-col items-center justify-center gap-1.5 mb-3 ml-1"
+          style={{
+            width: TAB_WIDTH,
+            height: 68,
+            background: "var(--color-surface)",
+            border: "1px solid var(--color-border)",
+            borderLeft: "none",
+            borderRadius: "0 10px 10px 0",
+            boxShadow: "var(--shadow-md)",
+            color: "var(--color-text-muted)",
           }}
-        />
+        >
+          {/* Dot indicator — filled when filters are active */}
+          {selectedTagIds.length > 0 && (
+            <span
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: "50%",
+                background: "var(--color-primary)",
+                flexShrink: 0,
+              }}
+            />
+          )}
+
+          {/* Chevron — flips with open state */}
+          <svg
+            width="10"
+            height="10"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            aria-hidden="true"
+            style={{
+              transform: filterOpen ? "rotate(180deg)" : "rotate(0deg)",
+              transition: "transform 320ms cubic-bezier(0.16, 1, 0.3, 1)",
+            }}
+          >
+            <path d="M9 18l6-6-6-6" />
+          </svg>
+
+          {/* Vertical label */}
+          <span
+            style={{
+              fontSize: 9,
+              fontWeight: 600,
+              letterSpacing: "0.08em",
+              textTransform: "uppercase",
+              writingMode: "vertical-rl",
+              color: "var(--color-text-muted)",
+              lineHeight: 1,
+            }}
+          >
+            Filter
+          </span>
+        </button>
       </div>
 
       {/* ── Zone info card ── */}
