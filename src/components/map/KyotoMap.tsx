@@ -59,6 +59,12 @@ async function fetchShopsNear(
     method: "POST",
     body: query,
   });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Overpass ${res.status}: ${text.slice(0, 200)}`);
+  }
+
   const data = await res.json();
 
   return data.elements.map((el: OverpassElement) => ({
