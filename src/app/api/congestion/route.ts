@@ -209,7 +209,7 @@ async function fetchVenueCongestion(zone: (typeof KYOTO_ZONES)[0]) {
       level,
       updatedAt: new Date().toISOString(),
     };
-  } catch (_err) {
+  } catch {
     // ← fixed: was catch (err), err was unused
     const level = smartFallback(zone.id);
     console.error(`[BestTime] ❌ ${zone.id} → smart fallback L${level}`);
