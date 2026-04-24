@@ -36,7 +36,7 @@ const KyotoMapInner = dynamic(() => import("@/components/map/KyotoMapInner"), {
   ssr: false,
 });
 
-const REFRESH_INTERVAL_MS = 10 * 60 * 1000;
+// const REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 const MIN_LOADER_MS = 3000;
 const TAB_WIDTH = 28; // px — always-visible peek width
 
@@ -161,10 +161,10 @@ export function KyotoMap() {
     loadData(false);
   }, [loadData]);
 
-  useEffect(() => {
-    const interval = setInterval(() => loadData(true), REFRESH_INTERVAL_MS);
-    return () => clearInterval(interval);
-  }, [loadData]);
+  // useEffect(() => {
+  //   const interval = setInterval(() => loadData(true), REFRESH_INTERVAL_MS);
+  //   return () => clearInterval(interval);
+  // }, [loadData]);
 
   // ── Zone interactions ───────────────────────────────────────────────────────
   const handleZoneClick = useCallback(
