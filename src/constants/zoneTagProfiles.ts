@@ -592,6 +592,12 @@ export const ZONE_TAG_PROFILES: Record<
       tip: "Tokugawa Ieyasu had all of Kyoto's temples moved to this street in 1590 — hence the name.",
       googleMaps: "https://maps.google.com/?q=Teramachi+Shopping+Street+Kyoto",
     },
+    nightlife: {
+      tip: "Teramachi and Sanjo turn into a lively evening district with late-open bars, cocktail spots, and easy access to Kiyamachi.",
+      bestTime: "After 7pm",
+      district: "Teramachi / Sanjo",
+      googleMaps: "https://maps.google.com/?q=Teramachi+Sanjo+Kyoto",
+    },
   },
 
   pontocho: {
@@ -745,6 +751,15 @@ export const ZONE_TAG_PROFILES: Record<
     },
     photography: {
       tip: "Weathered machiya facades, utility poles, and narrow alleys — classic quiet Kyoto street photography.",
+      googleMaps: "https://maps.google.com/?q=Nishiki+Market+Kyoto",
+    },
+    market: {
+      tip: "Small family-run craft and specialty shops hide in these lanes — incense, tofu, pickles, and kitchen goods.",
+      googleMaps: "https://maps.google.com/?q=Nishiki+Market+Kyoto",
+    },
+    matcha: {
+      tip: "Small tea shops and hidden counters nearby serve Uji matcha, sencha, and tea sweets — a quieter stop than the main market.",
+      bestTime: "Morning or mid-afternoon",
       googleMaps: "https://maps.google.com/?q=Nishiki+Market+Kyoto",
     },
   },
