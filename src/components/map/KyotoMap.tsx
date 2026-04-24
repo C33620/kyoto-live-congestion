@@ -46,23 +46,13 @@ async function fetchShopsNear(
   lng: number,
   radiusMeters: number,
 ): Promise<ShopMarker[]> {
-  const query = `
-    [out:json][timeout:25];
-    (
-      node["shop"](around:${radiusMeters},${lat},${lng});
-      node["amenity"~"^(restaurant|cafe|bar|fast_food)$"](around:${radiusMeters},${lat},${lng});
-    );
-    out body;
-  `;
-
-  const res = await fetch("https://overpass-api.de/api/interpreter", {
-    method: "POST",
-    body: query,
-  });
+  const res = await fetch(
+    `/api/shops?lat=${lat}&lng=${lng}&radius=${radiusMeters}`,
+  );
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Overpass ${res.status}: ${text.slice(0, 200)}`);
+    throw new Error(`/api/shops ${res.status}: ${text.slice(0, 200)}`);
   }
 
   const data = await res.json();
