@@ -1,12 +1,12 @@
 "use client";
 
 import type { ShopMarker } from "@/components/map/ZoneInfoCard";
+import { KYOTO_ZONES } from "@/constants/kyotoZones";
 import type { PublicDeal } from "@/lib/publicDeals";
 import {
   dealToSyntheticShop,
   fetchPublicDeals,
   getDealsForShop,
-  getZoneForDeal,
   normalizeName,
 } from "@/lib/publicDeals";
 import { useEffect, useState } from "react";
@@ -305,8 +305,65 @@ function DealBadge({ deal }: { deal: PublicDeal }) {
 }
 
 // ─── Shared row for all place types ───────────────────────────────────────────
-function PlaceRow({ shop, deals }: { shop: ShopMarker; deals: PublicDeal[] }) {
-  const shopDeals = getDealsForShop(deals, shop.name);
+
+function distanceKm(
+  aLat: number,
+  aLon: number,
+  bLat: number,
+  bLon: number,
+): number {
+  const R = 6371;
+  const dLat = ((bLat - aLat) * Math.PI) / 180;
+  const dLon = ((bLon - aLon) * Math.PI) / 180;
+
+  const aa =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((aLat * Math.PI) / 180) *
+      Math.cos((bLat * Math.PI) / 180) *
+      Math.sin(dLon / 2) ** 2;
+
+  return R * 2 * Math.atan2(Math.sqrt(aa), Math.sqrt(1 - aa));
+}
+function getNearestZoneIdForDeal(deal: PublicDeal): string | null {
+  if (deal.zone_id) return deal.zone_id;
+
+  if (deal.latitude == null || deal.longitude == null) {
+    return null;
+  }
+
+  let bestZoneId: string | null = null;
+  let bestDistanceKm = Number.POSITIVE_INFINITY;
+
+  for (const zone of KYOTO_ZONES) {
+    const km = distanceKm(
+      deal.latitude,
+      deal.longitude,
+      zone.center.lat,
+      zone.center.lng,
+    );
+
+    if (km < bestDistanceKm) {
+      bestDistanceKm = km;
+      bestZoneId = zone.id;
+    }
+  }
+
+  return bestDistanceKm <= 2.5 ? bestZoneId : null;
+}
+
+function PlaceRow({
+  shop,
+  deals,
+  zoneId,
+}: {
+  shop: ShopMarker;
+  deals: PublicDeal[];
+  zoneId: string;
+}) {
+  const zoneDeals = deals.filter(
+    (deal) => getNearestZoneIdForDeal(deal) === zoneId,
+  );
+  const shopDeals = getDealsForShop(zoneDeals, shop.name);
 
   const mapsHref =
     shop.tags?.website && shop.lat === 0 && shop.lon === 0
@@ -414,15 +471,33 @@ export default function ZoneShopsSection({
 
   const curated = curateShops(shops);
 
-  const syntheticShops = deals
-    .filter((deal) => getZoneForDeal(deal.normalized_address) === zoneId)
-    .filter(
-      (deal) =>
-        !curated.some(
-          (s) => normalizeName(s.name) === normalizeName(deal.venue_name),
-        ),
-    )
-    .map(dealToSyntheticShop);
+  // ✅ New — group deals by venue_id, one ShopMarker per venue
+  const zoneDealsGrouped = new Map<string, PublicDeal[]>();
+
+  for (const deal of deals) {
+    const resolvedZoneId = getNearestZoneIdForDeal(deal);
+
+    if (resolvedZoneId !== zoneId) continue;
+
+    // Skip if already covered by an Overpass shop
+    if (
+      curated.some(
+        (s) => normalizeName(s.name) === normalizeName(deal.venue_name),
+      )
+    ) {
+      continue;
+    }
+
+    if (!zoneDealsGrouped.has(deal.venue_id)) {
+      zoneDealsGrouped.set(deal.venue_id, []);
+    }
+    zoneDealsGrouped.get(deal.venue_id)!.push(deal);
+  }
+
+  // One ShopMarker per venue, using the first deal's data
+  const syntheticShops: ShopMarker[] = [...zoneDealsGrouped.values()].map(
+    (venueDeals) => dealToSyntheticShop(venueDeals[0]),
+  );
 
   const allShops = [...curated, ...syntheticShops];
 
@@ -530,6 +605,7 @@ export default function ZoneShopsSection({
                                   key={shop.id}
                                   shop={shop}
                                   deals={deals}
+                                  zoneId={zoneId}
                                 />
                               ))}
                             </ul>
@@ -588,6 +664,7 @@ export default function ZoneShopsSection({
                                     key={shop.id}
                                     shop={shop}
                                     deals={deals}
+                                    zoneId={zoneId}
                                   />
                                 ))}
                               </ul>
@@ -603,6 +680,7 @@ export default function ZoneShopsSection({
                                 key={shop.id}
                                 shop={shop}
                                 deals={deals}
+                                zoneId={zoneId}
                               />
                             ))}
                           </ul>
@@ -616,7 +694,12 @@ export default function ZoneShopsSection({
                     className="divide-y divide-[var(--color-divider)]"
                   >
                     {items.map((shop) => (
-                      <PlaceRow key={shop.id} shop={shop} deals={deals} />
+                      <PlaceRow
+                        key={shop.id}
+                        shop={shop}
+                        deals={deals}
+                        zoneId={zoneId}
+                      />
                     ))}
                   </ul>
                 )}
