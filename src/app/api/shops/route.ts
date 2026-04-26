@@ -1,47 +1,42 @@
+import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
+
+export const revalidate = 600;
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (!supabaseUrl) {
+  throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL");
+}
+
+if (!serviceRoleKey) {
+  throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY");
+}
+
+const supabase = createClient(supabaseUrl, serviceRoleKey);
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
-  const lat = searchParams.get("lat");
-  const lng = searchParams.get("lng");
-  const radius = searchParams.get("radius");
+  const zoneId = searchParams.get("zoneId");
 
-  if (!lat || !lng || !radius) {
-    return NextResponse.json(
-      { error: "Missing lat, lng, or radius" },
-      { status: 400 },
-    );
+  if (!zoneId) {
+    return NextResponse.json({ error: "Missing zoneId" }, { status: 400 });
   }
 
-  const query = `
-    [out:json][timeout:25];
-    (
-      node["shop"](around:${radius},${lat},${lng});
-      node["amenity"~"^(restaurant|cafe|bar|fast_food)$"](around:${radius},${lat},${lng});
-    );
-    out body;
-  `.trim();
+  const { data, error } = await supabase
+    .from("zone_shops")
+    .select("data")
+    .eq("zone_id", zoneId)
+    .single();
 
-  const overpassUrl = new URL("https://overpass.kumi.systems/api/interpreter");
-  overpassUrl.searchParams.set("data", query);
+  if (error || !data) {
+    return NextResponse.json({ error: "Zone not found" }, { status: 404 });
+  }
 
-  const res = await fetch(overpassUrl.toString(), {
-    method: "GET",
-    cache: "no-store",
+  return NextResponse.json(data.data, {
     headers: {
-      "User-Agent": "kyoto-live-congestion/1.0 (contact: hello@yourdomain.com)",
-      Accept: "application/json",
+      "Cache-Control": "public, s-maxage=600, stale-while-revalidate=300",
     },
   });
-
-  if (!res.ok) {
-    const text = await res.text();
-    return NextResponse.json(
-      { error: `Overpass ${res.status}`, details: text.slice(0, 300) },
-      { status: res.status },
-    );
-  }
-
-  const data = await res.json();
-  return NextResponse.json(data);
 }

@@ -1,248 +1,259 @@
-import { KYOTO_ZONES } from "@/constants/kyotoZones";
+import {
+  KYOTO_ZONES,
+  type ZoneGeometryWithCategory,
+} from "@/constants/kyotoZones";
 import { NextResponse } from "next/server";
 
+// ─── Optional BestTime upgrade path ──────────────────────────────────────────
 const BESTTIME_API_KEY = process.env.BESTTIME_API_KEY ?? "";
 
-const BESTTIME_OVERRIDES: Record<string, { name: string; address: string }> = {
-  "gion-kiyomizudera": {
-    name: "Kiyomizu-dera",
-    address: "1 Chome-294 Kiyomizu, Higashiyama Ward, Kyoto, Japan",
-  },
-  "fushimi-inari": {
-    name: "Fushimi Inari Taisha",
-    address: "68 Fukakusa Yabunouchicho, Fushimi Ward, Kyoto, Japan",
-  },
-  kinkakuji: {
-    name: "Kinkaku-ji",
-    address: "1 Kinkakujicho, Kita Ward, Kyoto, Japan",
-  },
-  ryoanji: {
-    name: "Ryoan-ji",
-    address: "13 Ryoanjigoryo-shitacho, Ukyo Ward, Kyoto, Japan",
-  },
-  "nijo-castle": {
-    name: "Nijo Castle",
-    address: "541 Nijojo-cho, Nakagyo Ward, Kyoto, Japan",
-  },
-  tofukuji: {
-    name: "Tofuku-ji",
-    address: "15-778 Honmachi, Higashiyama Ward, Kyoto, Japan",
-  },
-  daitokuji: {
-    name: "Daitoku-ji",
-    address: "53 Daitokujicho, Kita Ward, Kyoto, Japan",
-  },
-  "kurama-temple": {
-    name: "Kurama-dera",
-    address: "1074 Kuramahonmachi, Sakyo Ward, Kyoto, Japan",
-  },
-  "kamigamo-shrine": {
-    name: "Kamigamo Shrine",
-    address: "339 Kamigamo Motoyama, Kita Ward, Kyoto, Japan",
-  },
-  "fushimi-momoyama-castle": {
-    name: "Fushimi Momoyama Castle",
-    address: "Fushimi Momoyama, Fushimi Ward, Kyoto, Japan",
-  },
-  "jojakko-ji": {
-    name: "Jojakko-ji Temple",
-    address: "Sagaogurayama Oguracho, Ukyo Ward, Kyoto, Japan",
-  },
-  "nison-in": {
-    name: "Nison-in Temple",
-    address: "Saganisonin Monzen Nakanosachiocho, Ukyo Ward, Kyoto, Japan",
-  },
-  "konkai-komyoji": {
-    name: "Konkai Komyo-ji",
-    address: "121 Kurodanicho, Sakyo Ward, Kyoto, Japan",
-  },
-  "arashiyama-sagano": {
-    name: "Arashiyama Bamboo Forest",
-    address: "Sagaogurayama Tabuchiyamacho, Ukyo Ward, Kyoto, Japan",
-  },
-  "philosopher-path": {
-    name: "Nanzen-ji",
-    address: "86 Fukuchicho, Sakyo Ward, Kyoto, Japan",
-  },
-  "fushimi-momoyama": {
-    name: "Gekkeikan Okura Sake Museum",
-    address: "247 Minamihama-cho, Fushimi Ward, Kyoto, Japan",
-  },
-  "kibune-village": {
-    name: "Kibune Shrine",
-    address: "180 Kuramakibunecho, Sakyo Ward, Kyoto, Japan",
-  },
-  "kyoto-imperial-park": {
-    name: "Kyoto Imperial Palace",
-    address: "Kyoto Imperial Palace, Kamigyo Ward, Kyoto, Japan",
-  },
-  "katsura-imperial-villa": {
-    name: "Katsura Imperial Villa",
-    address: "Katsuramisono, Nishikyo Ward, Kyoto, Japan",
-  },
-  "nishiki-market": {
-    name: "Nishiki Tenmangu Shrine",
-    address: "Nishiki Tenmangu, Nakagyo Ward, Kyoto, Japan",
-  },
-  "teramachi-sanjo": {
-    name: "Teramachi Shopping Street Kyoto",
-    address: "Teramachi, Nakagyo Ward, Kyoto, Japan",
-  },
-  pontocho: {
-    name: "Pontocho Alley",
-    address: "Pontocho, Nakagyo Ward, Kyoto, Japan",
-  },
-  "toji-market": {
-    name: "To-ji Temple",
-    address: "1 Toji-cho, Minami Ward, Kyoto, Japan",
-  },
-  "central-kawaramachi": {
-    name: "Gion Corner",
-    address: "570-2 Minamigawa, Higashiyama Ward, Kyoto, Japan",
-  },
-  higashiyama: {
-    name: "Yasaka Shrine Kyoto",
-    address: "625 Gionmachi Kitagawa, Higashiyama Ward, Kyoto, Japan",
-  },
-  "nishiki-koji-backstreets": {
-    name: "Nishiki Koji Kyoto",
-    address: "Nishikikoji, Nakagyo Ward, Kyoto, Japan",
-  },
-  "fushimi-neighborhood": {
-    name: "Fushimi Inari Station Area",
-    address: "Fukakusa Ichi no Tsubo, Fushimi Ward, Kyoto, Japan",
-  },
-  "kyoto-station": {
-    name: "Kyoto Station",
-    address: "Karasuma-dori Shiokoji, Shimogyo Ward, Kyoto, Japan",
-  },
+// ─── JST helper ───────────────────────────────────────────────────────────────
+function getJSTDate(): Date {
+  return new Date(new Date().getTime() + 9 * 60 * 60 * 1000);
+}
+
+// ─── National holiday checker ─────────────────────────────────────────────────
+// Returns a crowd boost for Japanese national holidays.
+// All public holidays increase Kyoto crowds noticeably. [web:508]
+function getNationalHolidayBoost(jst: Date): number {
+  const m = jst.getMonth(); // 0-based
+  const d = jst.getDate();
+  const dow = jst.getDay(); // 0=Sun
+
+  // Helper: nth Monday of a month
+  function nthMonday(n: number): number {
+    let count = 0;
+    for (let day = 1; day <= 31; day++) {
+      const test = new Date(jst.getFullYear(), m, day);
+      if (test.getMonth() !== m) break;
+      if (test.getDay() === 1) {
+        count++;
+        if (count === n) return day;
+      }
+    }
+    return -1;
+  }
+
+  // January
+  if (m === 0 && d === 1) return 2; // New Year's Day
+  if (m === 0 && d <= 3) return 2; // Shogatsu (Jan 2–3 still very busy)
+  if (m === 0 && d === nthMonday(2)) return 1; // Coming of Age Day
+
+  // February
+  if (m === 1 && d === 11) return 1; // National Foundation Day
+  if (m === 1 && d === 23) return 1; // Emperor's Birthday
+  if (m === 1 && d === 24 && dow === 1) return 1; // Observed if on weekend
+
+  // March
+  if (m === 2 && d === 20) return 1; // Vernal Equinox Day
+  if (m === 2 && d === 21 && dow === 1) return 1; // Observed
+
+  // April/May — Golden Week handled in seasonal boost, skip here to avoid double-count
+  // (April 29, May 3–5 are inside the Golden Week boost window)
+
+  // July
+  const thirdMondayJuly = nthMonday(3);
+  if (m === 6 && d === thirdMondayJuly) return 1; // Marine Day
+
+  // August
+  if (m === 7 && d === 11) return 1; // Mountain Day
+  if (m === 7 && d === 12 && dow === 1) return 1; // Observed
+  // Obon: not a national holiday but hugely impacts Kyoto crowds
+  if (m === 7 && d >= 13 && d <= 16) return 1; // Obon week
+
+  // September — Silver Week 2026 (Sep 19–23, rare 5-day holiday) [web:497]
+  const thirdMondaySep = nthMonday(3);
+  if (m === 8 && d === thirdMondaySep) return 1; // Respect for Aged Day
+  if (m === 8 && d === 22) return 1; // 2026 Citizens' Holiday (Silver Week bridge)
+  if (m === 8 && d === 23) return 1; // Autumnal Equinox Day
+  // Silver Week window boost (5-day holiday = Golden Week equivalent)
+  if (m === 8 && d >= 19 && d <= 23) return 1;
+
+  // October
+  const secondMondayOct = nthMonday(2);
+  if (m === 9 && d === secondMondayOct) return 1; // Sports Day
+
+  // November
+  if (m === 10 && d === 3) return 1; // Culture Day — autumn leaf peak [web:502]
+  if (m === 10 && d === 23) return 1; // Labor Thanksgiving Day
+
+  // December
+  if (m === 11 && d === 23) return 1; // Emperor's Birthday (observed)
+  if (m === 11 && d === 31) return 2; // New Year's Eve rush
+
+  return 0;
+}
+
+// ─── Seasonal boost ───────────────────────────────────────────────────────────
+function getSeasonalBoost(jst: Date): { boost: number; isGoldenWeek: boolean } {
+  const m = jst.getMonth();
+  const d = jst.getDate();
+
+  // Golden Week: April 29 – May 5
+  if ((m === 3 && d >= 29) || (m === 4 && d <= 5))
+    return { boost: 2, isGoldenWeek: true };
+
+  // Cherry blossom peak: March 25 – April 10
+  if ((m === 2 && d >= 25) || (m === 3 && d <= 10))
+    return { boost: 2, isGoldenWeek: false };
+
+  // Cherry blossom shoulder: April 11–28
+  if (m === 3 && d >= 11) return { boost: 1, isGoldenWeek: false };
+
+  // Autumn peak: Nov 10 – Dec 5
+  if ((m === 10 && d >= 10) || (m === 11 && d <= 5))
+    return { boost: 2, isGoldenWeek: false };
+
+  // Autumn shoulder: Nov 1–9
+  if (m === 10 && d < 10) return { boost: 1, isGoldenWeek: false };
+
+  // Gion Matsuri: July 10–24
+  if (m === 6 && d >= 10 && d <= 24) return { boost: 1, isGoldenWeek: false };
+
+  // New Year: Dec 31 – Jan 3
+  if ((m === 11 && d === 31) || (m === 0 && d <= 3))
+    return { boost: 2, isGoldenWeek: false };
+
+  // Obon: August 13–16
+  if (m === 7 && d >= 13 && d <= 16) return { boost: 1, isGoldenWeek: false };
+
+  // Summer August
+  if (m === 7) return { boost: 1, isGoldenWeek: false };
+
+  // Low season: February, June, September (outside Silver Week)
+  if ([1, 5].includes(m)) return { boost: -1, isGoldenWeek: false };
+
+  return { boost: 0, isGoldenWeek: false };
+}
+
+// ─── Time-of-day base score ───────────────────────────────────────────────────
+function timeScore(h: number): number {
+  if (h < 6) return 1;
+  if (h < 8) return 2;
+  if (h < 9) return 3;
+  if (h < 11) return 4;
+  if (h < 16) return 5;
+  if (h < 18) return 4;
+  if (h < 20) return 3;
+  if (h < 22) return 2;
+  return 1;
+}
+
+// ─── Zone configurations ──────────────────────────────────────────────────────
+const CATEGORY_BASE: Record<string, number> = {
+  "temple-shrine": 1,
+  "nature-garden": 0,
+  "market-shopping": 0,
+  "district-culture": 0,
+  "transport-hub": 1,
 };
 
-function scoreToCongestionLevel(score: number): 1 | 2 | 3 | 4 | 5 {
-  if (score < 20) return 1;
-  if (score < 40) return 2;
-  if (score < 60) return 3;
-  if (score < 80) return 4;
-  return 5;
-}
+const HOT_ZONES = new Set([
+  "gion-kiyomizudera",
+  "fushimi-inari",
+  "arashiyama-sagano",
+  "kinkakuji",
+  "higashiyama",
+  "nishiki-market",
+  "kyoto-station",
+]);
 
-function smartFallback(zoneId: string): 1 | 2 | 3 | 4 | 5 {
-  const jstHour = (new Date().getUTCHours() + 9) % 24;
-  const isWeekend = [0, 6].includes(new Date().getDay());
-  const isPeak = jstHour >= 10 && jstHour <= 16;
-  const hotZones = [
-    "gion-kiyomizudera",
-    "fushimi-inari",
-    "arashiyama-sagano",
-    "kinkakuji",
-    "higashiyama",
-  ];
-  const isHot = hotZones.includes(zoneId);
-  if (isPeak && isWeekend && isHot) return 5;
-  if (isPeak && isHot) return 4;
-  if (isPeak && isWeekend) return 3;
-  if (isPeak) return 3;
-  return 2;
-}
+const MARKET_ZONES = new Set([
+  "nishiki-market",
+  "teramachi-sanjo",
+  "toji-market",
+]);
 
-async function fetchVenueCongestion(zone: (typeof KYOTO_ZONES)[0]) {
-  const override = BESTTIME_OVERRIDES[zone.id];
-  const venueName = override?.name ?? zone.name;
-  const venueAddress = override?.address ?? `${zone.name}, Kyoto, Japan`;
+const EVENING_ZONES = new Set(["pontocho", "gion-kiyomizudera"]);
 
-  try {
-    const forecastUrl = new URL("https://besttime.app/api/v1/forecasts");
-    forecastUrl.searchParams.set("api_key_private", BESTTIME_API_KEY);
-    forecastUrl.searchParams.set("venue_name", venueName);
-    forecastUrl.searchParams.set("venue_address", venueAddress);
+const TRANSPORT_ZONES = new Set(["kyoto-station"]);
 
-    const forecastRes = await fetch(forecastUrl.toString(), { method: "POST" });
-    const forecastData = await forecastRes.json();
+// ─── Core estimation ──────────────────────────────────────────────────────────
+function estimateCongestion(zone: ZoneGeometryWithCategory): 1 | 2 | 3 | 4 | 5 {
+  const jst = getJSTDate();
+  const jstHour = jst.getHours();
+  const dayOfWeek = jst.getDay();
+  const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+  const { boost, isGoldenWeek } = getSeasonalBoost(jst);
+  const holidayBoost = getNationalHolidayBoost(jst);
 
-    if (!forecastRes.ok || forecastData.status === "Error") {
-      throw new Error(JSON.stringify(forecastData.message));
+  let score = timeScore(jstHour);
+
+  score += CATEGORY_BASE[zone.category] ?? 0;
+
+  if (HOT_ZONES.has(zone.id) && !zone.isHiddenGem) score += 1;
+
+  // Weekend or holiday boost (not for hidden gems)
+  const isDayOff = isWeekend || holidayBoost > 0;
+  if (isDayOff) score += zone.isHiddenGem ? 0 : 1;
+
+  // Market zones: narrow peak 10am–3pm
+  if (MARKET_ZONES.has(zone.id)) {
+    // Toji market: only busy on the 21st of each month
+    if (zone.id === "toji-market") {
+      if (jst.getDate() !== 21 || jstHour < 9 || jstHour > 16) score -= 3;
+    } else if (jstHour < 10 || jstHour > 15) {
+      score -= 2;
     }
-
-    const venueId: string = forecastData?.venue_info?.venue_id ?? "";
-    if (!venueId) throw new Error("no venue_id");
-
-    const liveUrl = new URL("https://besttime.app/api/v1/forecasts/live");
-    liveUrl.searchParams.set("api_key_private", BESTTIME_API_KEY);
-    liveUrl.searchParams.set("venue_id", venueId);
-
-    const liveRes = await fetch(liveUrl.toString(), { method: "POST" });
-    const liveData = await liveRes.json();
-    const liveScore: number = liveData?.analysis?.venue_live_busyness;
-
-    if (typeof liveScore === "number" && liveScore >= 0) {
-      const level = scoreToCongestionLevel(liveScore);
-      console.log(`[BestTime] ✅ ${zone.id} live=${liveScore} → L${level}`);
-      return {
-        id: zone.id,
-        name: zone.name,
-        category: zone.category,
-        description: zone.description,
-        isHiddenGem: zone.isHiddenGem,
-        alternativeTo: zone.alternativeTo,
-        level,
-        updatedAt: new Date().toISOString(),
-      };
-    }
-
-    // Fallback to forecast for current JST hour
-    const jstHour = (new Date().getUTCHours() + 9) % 24;
-    const dayAnalysis = forecastData?.analysis?.[0]?.hour_analysis;
-    const hourData = Array.isArray(dayAnalysis)
-      ? dayAnalysis.find((h: { hour: number }) => h.hour === jstHour)
-      : null;
-    const forecastScore = (hourData?.intensity_nr ?? 2) * 20;
-    const level = scoreToCongestionLevel(forecastScore);
-    console.log(`[BestTime] ⚠️ ${zone.id} forecast h=${jstHour} → L${level}`);
-
-    return {
-      id: zone.id,
-      name: zone.name,
-      category: zone.category,
-      description: zone.description,
-      isHiddenGem: zone.isHiddenGem,
-      alternativeTo: zone.alternativeTo,
-      level,
-      updatedAt: new Date().toISOString(),
-    };
-  } catch {
-    // ← fixed: was catch (err), err was unused
-    const level = smartFallback(zone.id);
-    console.error(`[BestTime] ❌ ${zone.id} → smart fallback L${level}`);
-    return {
-      id: zone.id,
-      name: zone.name,
-      category: zone.category,
-      description: zone.description,
-      isHiddenGem: zone.isHiddenGem,
-      alternativeTo: zone.alternativeTo,
-      level,
-      updatedAt: new Date().toISOString(),
-    };
   }
+
+  // Evening zones
+  if (EVENING_ZONES.has(zone.id)) {
+    if (jstHour >= 18 && jstHour < 22) score += 1;
+    else if (jstHour >= 9 && jstHour < 18) score -= 1;
+  }
+
+  // Transport hubs: never below 3 during waking hours
+  if (TRANSPORT_ZONES.has(zone.id) && jstHour >= 6) {
+    score = Math.max(score, 3);
+  }
+
+  // Hidden gems: hard discount
+  if (zone.isHiddenGem) score -= 2;
+
+  // Seasonal boost (hidden gems exempt, except Golden Week)
+  if (!zone.isHiddenGem) {
+    score += boost;
+    score += holidayBoost;
+  } else if (isGoldenWeek) {
+    score += 1;
+  }
+
+  return Math.max(1, Math.min(5, Math.round(score))) as 1 | 2 | 3 | 4 | 5;
 }
 
+// ─── Response builder ─────────────────────────────────────────────────────────
+function buildZoneResult(zone: ZoneGeometryWithCategory) {
+  return {
+    id: zone.id,
+    name: zone.name,
+    category: zone.category,
+    description: zone.description,
+    isHiddenGem: zone.isHiddenGem,
+    alternativeTo: zone.alternativeTo,
+    level: estimateCongestion(zone),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+// ─── Route handler ────────────────────────────────────────────────────────────
 export async function GET() {
-  if (!BESTTIME_API_KEY) {
-    return NextResponse.json(
-      { error: "BESTTIME_API_KEY is not set" },
-      { status: 500 },
+  if (BESTTIME_API_KEY) {
+    console.warn(
+      "[congestion] BESTTIME_API_KEY set but estimation mode active.",
     );
   }
 
-  const results = await Promise.all(KYOTO_ZONES.map(fetchVenueCongestion));
+  const results = KYOTO_ZONES.map((zone) => buildZoneResult(zone));
+
   console.log(
-    "[BestTime] Done:",
+    "[estimation]",
     results.map((r) => `${r.id}=L${r.level}`).join(", "),
   );
 
   return NextResponse.json(results, {
     headers: {
-      "Cache-Control": "public, s-maxage=600, stale-while-revalidate=300",
+      "Cache-Control": "public, s-maxage=300, stale-while-revalidate=120",
     },
   });
 }

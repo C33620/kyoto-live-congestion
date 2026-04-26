@@ -36,19 +36,13 @@ const KyotoMapInner = dynamic(() => import("@/components/map/KyotoMapInner"), {
   ssr: false,
 });
 
-// const REFRESH_INTERVAL_MS = 10 * 60 * 1000;
+const REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 const MIN_LOADER_MS = 3000;
 const TAB_WIDTH = 28; // px — always-visible peek width
 
 // ─── Overpass fetch ───────────────────────────────────────────────────────────
-async function fetchShopsNear(
-  lat: number,
-  lng: number,
-  radiusMeters: number,
-): Promise<ShopMarker[]> {
-  const res = await fetch(
-    `/api/shops?lat=${lat}&lng=${lng}&radius=${radiusMeters}`,
-  );
+async function fetchShopsForZone(zoneId: string): Promise<ShopMarker[]> {
+  const res = await fetch(`/api/shops?zoneId=${encodeURIComponent(zoneId)}`);
 
   if (!res.ok) {
     const text = await res.text();
@@ -151,6 +145,22 @@ export function KyotoMap() {
       const map = new Map(zones.map((z) => [z.id, z]));
       setCongestionData(map);
       setLastFetched(new Date());
+
+      if (!isBackground) {
+        for (const zone of KYOTO_ZONES) {
+          fetchShopsForZone(zone.id)
+            .then((shops) =>
+              setShopsByZone((prev) =>
+                prev.has(zone.id) ? prev : new Map(prev).set(zone.id, shops),
+              ),
+            )
+            .catch(() =>
+              setShopsByZone((prev) =>
+                prev.has(zone.id) ? prev : new Map(prev).set(zone.id, []),
+              ),
+            );
+        }
+      }
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
@@ -161,10 +171,10 @@ export function KyotoMap() {
     loadData(false);
   }, [loadData]);
 
-  // useEffect(() => {
-  //   const interval = setInterval(() => loadData(true), REFRESH_INTERVAL_MS);
-  //   return () => clearInterval(interval);
-  // }, [loadData]);
+  useEffect(() => {
+    const interval = setInterval(() => loadData(true), REFRESH_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [loadData]);
 
   // ── Zone interactions ───────────────────────────────────────────────────────
   const handleZoneClick = useCallback(
@@ -182,17 +192,10 @@ export function KyotoMap() {
       setShopsByZone((prev) => new Map(prev).set(zoneId, null));
 
       try {
-        const zoneGeometry = KYOTO_ZONES.find((z) => z.id === zoneId);
-        if (!zoneGeometry) return;
-
-        const shops = await fetchShopsNear(
-          zoneGeometry.center.lat,
-          zoneGeometry.center.lng,
-          zoneGeometry.radius,
-        );
+        const shops = await fetchShopsForZone(zoneId);
         setShopsByZone((prev) => new Map(prev).set(zoneId, shops));
       } catch (err) {
-        console.error("Overpass fetch failed:", err);
+        console.error("Shops fetch failed:", err);
         setShopsByZone((prev) => new Map(prev).set(zoneId, []));
       }
     },

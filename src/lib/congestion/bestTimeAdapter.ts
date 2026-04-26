@@ -20,3 +20,5 @@ export const bestTimeAdapter: CongestionAdapter = {
     return zones.find((z) => z.id === id) ?? null;
   },
 };
+
+export const congestionAdapter = bestTimeAdapter;
