@@ -1,4 +1,4 @@
-# 🗺️ Kyoto Smart Tourism Map
+# 🗺️ Kyoto Live Congestion Map
 
 > A data-driven interactive map concept designed to redistribute tourist flow in Kyoto by highlighting cultural alternatives to overcrowded landmarks.
 
